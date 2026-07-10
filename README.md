@@ -95,6 +95,7 @@ server {
 | `PORT` | `3000` | 리슨 포트 |
 | `MAX_HISTORY` | `100` | 보관할 최근 요청 수 |
 | `DATA_FILE` | `data.json` | 캡처된 요청을 저장할 파일 경로 |
+| `CAPTURE_METHODS` | `POST` | 기록할 HTTP 메서드(쉼표 구분). 예: `POST,PUT`. 그 외 메서드(브라우저의 `GET /favicon.ico` 등)는 무시됨 |
 
 ## 데이터 저장 방식
 

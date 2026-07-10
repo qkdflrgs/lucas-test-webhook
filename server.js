@@ -10,6 +10,11 @@ const PORT = process.env.PORT || 3000;
 const MAX_HISTORY = Number(process.env.MAX_HISTORY || 100);
 // Captured requests are persisted here so they survive restarts.
 const DATA_FILE = path.resolve(process.env.DATA_FILE || 'data.json');
+// Only these HTTP methods are recorded; others (e.g. the browser's GET
+// /favicon.ico) just get a 200 and are ignored. Comma-separated, default POST.
+const CAPTURE_METHODS = new Set(
+  (process.env.CAPTURE_METHODS || 'POST').split(',').map((m) => m.trim().toUpperCase())
+);
 
 // -----------------------------------------------------------------------------
 // Body parsing
@@ -114,6 +119,11 @@ app.get(['/_inspect', '/_inspect/'], (_req, res) => {
 // Catch-all: every other request is a webhook to capture.
 // -----------------------------------------------------------------------------
 app.all(/.*/, (req, res) => {
+  // Ignore methods we don't capture (browser GET /favicon.ico, health probes, etc.)
+  if (!CAPTURE_METHODS.has(req.method)) {
+    return res.status(200).json({ received: false, ignored: req.method });
+  }
+
   const entry = record(req);
   console.log(
     `\n[${entry.time}] ${entry.method} ${entry.path} from ${entry.ip}`
