@@ -2,9 +2,9 @@
 // Role: (1) keep the API key on the server and proxy the CHeKT API,
 //       (2) serve the static dashboard from public/.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFile, rename } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import express from 'express';
 import * as api from './lib/chekt.js';
 
@@ -123,14 +123,96 @@ app.get('/api/events/recent', (req, res) => {
   res.json({ events: recentEvents, clients: sseClients.size });
 });
 
+// -----------------------------------------------------------------------------
+// Request Inspector (carried over from the original lucas-test-webhook)
+//
+// Alongside the live SSE dashboard, every webhook is recorded to a ring buffer
+// and persisted to DATA_FILE so deliveries survive restarts and can be reviewed
+// as raw payloads at /_inspect.
+// -----------------------------------------------------------------------------
+const MAX_HISTORY = Number(process.env.MAX_HISTORY || 100);
+const DATA_FILE = process.env.DATA_FILE
+  ? resolve(process.env.DATA_FILE)
+  : join(__dirname, 'data.json');
+
+let history = [];
+let recordCounter = 0;
+
+// Load previously captured requests on startup.
+try {
+  if (existsSync(DATA_FILE)) {
+    const saved = JSON.parse(readFileSync(DATA_FILE, 'utf8'));
+    if (Array.isArray(saved.requests)) history = saved.requests.slice(0, MAX_HISTORY);
+    recordCounter = Number(saved.total) || history.reduce((m, r) => Math.max(m, r.id || 0), 0);
+    console.log(`[inspector] loaded ${history.length} saved request(s) from ${DATA_FILE}`);
+  }
+} catch (err) {
+  console.error(`[inspector] could not read ${DATA_FILE}:`, err.message);
+}
+
+// Atomic, non-overlapping persistence: write to a temp file then rename.
+let writing = false;
+let dirty = false;
+function saveHistory() {
+  if (writing) { dirty = true; return; }
+  writing = true;
+  dirty = false;
+  const payload = JSON.stringify({ total: recordCounter, requests: history }, null, 2);
+  const tmp = DATA_FILE + '.tmp';
+  writeFile(tmp, payload, (err) => {
+    if (err) { console.error('[inspector] write failed:', err.message); writing = false; return; }
+    rename(tmp, DATA_FILE, (rErr) => {
+      if (rErr) console.error('[inspector] save failed:', rErr.message);
+      writing = false;
+      if (dirty) saveHistory(); // flush changes that arrived mid-write
+    });
+  });
+}
+
+function recordRequest(req) {
+  let body = req.body;
+  if (Buffer.isBuffer(body)) body = body.length ? body.toString('utf8') : undefined;
+  if (body && typeof body === 'object' && Object.keys(body).length === 0) body = undefined;
+
+  const entry = {
+    id: ++recordCounter,
+    time: new Date().toISOString(),
+    method: req.method,
+    path: req.originalUrl,
+    ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+    headers: req.headers,
+    query: Object.keys(req.query).length ? req.query : undefined,
+    body,
+  };
+  history.unshift(entry);
+  if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+  saveHistory();
+  return entry;
+}
+
+// Inspector viewer routes (prefixed with /_ so they never collide with webhooks).
+app.get('/_inspect/data', (_req, res) => {
+  res.json({ count: history.length, total: recordCounter, requests: history });
+});
+app.post('/_inspect/clear', (_req, res) => {
+  history.length = 0;
+  saveHistory();
+  res.json({ ok: true });
+});
+app.get(['/_inspect', '/_inspect/'], (_req, res) => {
+  res.type('html').send(INSPECTOR_HTML);
+});
+
 // Webhook entry point. Point your CHeKT dealer webhook endpoint here.
 // Accepts POST to /webhook or any /webhook/* subpath.
 app.post(['/webhook', '/webhook/*'], (req, res) => {
   const ev = normalizeWebhook(req);
-  broadcast(ev);
+  broadcast(ev);              // push to live dashboard (SSE)
+  const rec = recordRequest(req); // persist raw payload for /_inspect
   console.log(`[webhook] #${ev.id} ${ev.event_type}` +
     (ev.status ? `/${ev.status}` : '') +
-    ` site=${ev.site_id ?? ev.account_number ?? '?'} → ${sseClients.size} client(s)`);
+    ` site=${ev.site_id ?? ev.account_number ?? '?'} → ${sseClients.size} client(s)` +
+    ` (inspector #${rec.id})`);
   res.status(200).json({ received: true, id: ev.id });
 });
 
@@ -188,5 +270,82 @@ app.listen(PORT, () => {
   console.log(`\n  CHeKT Monitoring Dashboard`);
   console.log(`  ▶  Dashboard : http://localhost:${PORT}`);
   console.log(`  ▶  Webhook   : POST http://localhost:${PORT}/webhook`);
+  console.log(`  ▶  Inspector : http://localhost:${PORT}/_inspect`);
   console.log(`  ▶  Mode      : ${mode}\n`);
 });
+
+// -----------------------------------------------------------------------------
+// Inspector viewer page (self-contained, polls /_inspect/data)
+// -----------------------------------------------------------------------------
+const INSPECTOR_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webhook Inspector</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    border-bottom: 1px solid #8884; position: sticky; top: 0; background: Canvas; }
+  h1 { font-size: 15px; margin: 0; }
+  .muted { opacity: .6; }
+  button { font: inherit; padding: 4px 10px; cursor: pointer; }
+  main { padding: 16px; display: grid; gap: 12px; }
+  .card { border: 1px solid #8884; border-radius: 6px; overflow: hidden; }
+  .card > .top { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px;
+    background: #8881; flex-wrap: wrap; }
+  .method { font-weight: 700; padding: 1px 8px; border-radius: 4px; background: #4a90d922; }
+  .path { font-weight: 600; }
+  pre { margin: 0; padding: 10px 12px; overflow-x: auto; white-space: pre-wrap;
+    word-break: break-word; border-top: 1px solid #8883; }
+  .label { padding: 6px 12px 0; font-size: 12px; opacity: .6; }
+  .empty { opacity: .5; padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Webhook Inspector</h1>
+  <span class="muted" id="stat"></span>
+  <span style="flex:1"></span>
+  <label class="muted"><input type="checkbox" id="auto" checked> auto-refresh</label>
+  <button onclick="load()">Refresh</button>
+  <button onclick="clearAll()">Clear</button>
+</header>
+<main id="list"><div class="empty">Waiting for requests…</div></main>
+<script>
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function fmt(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') { try { return JSON.stringify(JSON.parse(v), null, 2); } catch { return v; } }
+  return JSON.stringify(v, null, 2);
+}
+function render(data) {
+  document.getElementById('stat').textContent = data.count + ' shown · ' + data.total + ' total';
+  const list = document.getElementById('list');
+  if (!data.requests.length) { list.innerHTML = '<div class="empty">Waiting for requests…</div>'; return; }
+  list.innerHTML = data.requests.map(r => \`
+    <div class="card">
+      <div class="top">
+        <span class="method">\${esc(r.method)}</span>
+        <span class="path">\${esc(r.path)}</span>
+        <span class="muted">\${esc(r.time)}</span>
+        <span class="muted">\${esc(r.ip || '')}</span>
+      </div>
+      \${r.query ? '<div class="label">query</div><pre>'+esc(fmt(r.query))+'</pre>' : ''}
+      \${r.body !== undefined ? '<div class="label">body</div><pre>'+esc(fmt(r.body))+'</pre>' : '<div class="label muted" style="padding-bottom:8px">(no body)</div>'}
+      <div class="label">headers</div><pre>\${esc(fmt(r.headers))}</pre>
+    </div>\`).join('');
+}
+async function load() {
+  try { const r = await fetch('/_inspect/data'); render(await r.json()); } catch (e) {}
+}
+async function clearAll() {
+  await fetch('/_inspect/clear', { method: 'POST' }); load();
+}
+load();
+setInterval(() => { if (document.getElementById('auto').checked) load(); }, 2000);
+</script>
+</body>
+</html>`;
