@@ -1,9 +1,9 @@
 {
-  "name": "lucas-test-webhook",
+  "name": "chekt-monitoring-dashboard",
   "version": "1.0.0",
-  "description": "Webhook data inspection/testing service (Express)",
+  "description": "CHeKT Public API monitoring dashboard demo (Express proxy + static frontend)",
+  "type": "module",
   "main": "server.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CHeKT Monitoring Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">CHeKT</span>
+      <span class="brand-sub">Monitoring Dashboard</span>
+    </div>
+    <div class="topbar-right">
+      <span id="live-badge" class="badge live-badge" title="Real-time webhook stream">
+        <span id="live-dot" class="live-dot off"></span> <span id="live-text">Live: connecting…</span>
+      </span>
+      <button id="feed-btn" class="btn btn-ghost" title="Live event feed">
+        📡 Events <span id="feed-count" class="feed-count zero">0</span>
+      </button>
+      <span id="mode-badge" class="badge">Checking connection…</span>
+      <button id="refresh-btn" class="btn btn-ghost" title="Refresh">↻ Refresh</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- Left: site list -->
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <h2>Sites</h2>
+        <span id="site-count" class="count">0</span>
+      </div>
+      <input id="site-search" class="search" type="text" placeholder="Search name / address / account…" />
+      <ul id="site-list" class="site-list"></ul>
+    </aside>
+
+    <!-- Right: detail -->
+    <main class="content">
+      <div id="empty-state" class="empty-state">
+        <div class="empty-icon">🛡️</div>
+        <p>Select a site from the left.</p>
+      </div>
+
+      <section id="detail" class="detail hidden">
+        <!-- Site header + arming control -->
+        <div class="detail-head">
+          <div>
+            <h1 id="site-name">—</h1>
+            <p id="site-meta" class="muted"></p>
+          </div>
+          <div class="arming-panel">
+            <div class="arming-status">
+              <span class="muted small">Arming state</span>
+              <span id="arming-badge" class="arming-badge">—</span>
+              <span id="arming-updated" class="muted small"></span>
+            </div>
+            <div class="arming-actions">
+              <button id="arm-btn" class="btn btn-danger">Arm</button>
+              <button id="disarm-btn" class="btn btn-primary">Disarm</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Partitions (partition-system sites) -->
+        <div id="partition-block" class="card hidden">
+          <div class="card-head"><h3>Partition Arming</h3></div>
+          <div id="partition-list" class="partition-list"></div>
+        </div>
+
+        <!-- KPI summary -->
+        <div class="kpi-row">
+          <div class="kpi"><span class="kpi-val" id="kpi-cameras">0</span><span class="kpi-label">Cameras</span></div>
+          <div class="kpi"><span class="kpi-val" id="kpi-online">0</span><span class="kpi-label">Online</span></div>
+          <div class="kpi"><span class="kpi-val" id="kpi-offline">0</span><span class="kpi-label">Offline</span></div>
+          <div class="kpi"><span class="kpi-val" id="kpi-zones">0</span><span class="kpi-label">Zones</span></div>
+        </div>
+
+        <!-- Camera grid -->
+        <div class="card">
+          <div class="card-head"><h3>Cameras</h3><span id="camera-count" class="count">0</span></div>
+          <div id="camera-grid" class="camera-grid"></div>
+        </div>
+
+        <!-- Contacts -->
+        <div class="card">
+          <div class="card-head">
+            <h3>Contacts</h3>
+            <div class="card-head-right">
+              <span id="contact-count" class="count">0</span>
+              <button id="contact-add" class="btn btn-primary btn-sm">+ Add contact</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="log-table" id="contact-table">
+              <thead>
+                <tr><th>Name</th><th>Title</th><th>Phone</th><th>Email</th><th>Alarm</th><th>SMS validation</th><th></th></tr>
+              </thead>
+              <tbody id="contact-body"></tbody>
+            </table>
+          </div>
+          <div id="contact-empty" class="log-empty muted hidden">No contacts.</div>
+        </div>
+
+        <!-- Activity log -->
+        <div class="card">
+          <div class="card-head">
+            <h3>Activity Log</h3>
+            <div class="log-controls">
+              <select id="log-category" class="select"><option value="">All categories</option></select>
+              <select id="log-range" class="select">
+                <option value="1">Last 24 hours</option>
+                <option value="7" selected>Last 7 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 90 days</option>
+              </select>
+            </div>
+          </div>
+          <div id="log-table-wrap" class="table-wrap">
+            <table class="log-table">
+              <thead>
+                <tr><th>Time</th><th>Category</th><th>Trigger</th><th>Status</th><th>Zone</th><th>Device</th><th>Video</th></tr>
+              </thead>
+              <tbody id="log-body"></tbody>
+            </table>
+          </div>
+          <div id="log-empty" class="log-empty muted hidden">No records found.</div>
+          <button id="log-more" class="btn btn-ghost hidden">Load more</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Video modal -->
+  <div id="video-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>Event Video</h3>
+        <button id="modal-close" class="btn btn-ghost">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Contact add/edit modal -->
+  <div id="contact-modal" class="modal hidden">
+    <div class="modal-box modal-sm">
+      <div class="modal-head">
+        <h3 id="contact-modal-title">Add contact</h3>
+        <button id="contact-modal-close" class="btn btn-ghost">✕</button>
+      </div>
+      <form id="contact-form" class="modal-body form">
+        <div class="form-row">
+          <label>First name <span class="req">*</span>
+            <input name="first_name" type="text" required maxlength="45" />
+          </label>
+          <label>Last name <span class="req">*</span>
+            <input name="last_name" type="text" required maxlength="45" />
+          </label>
+        </div>
+        <div class="form-row">
+          <label>External contact ID <span class="req" id="ecid-req">*</span>
+            <input name="external_contact_id" type="text" maxlength="64" placeholder="Unique ID" />
+          </label>
+          <label>Title
+            <input name="title" type="text" maxlength="45" />
+          </label>
+        </div>
+        <div class="form-row">
+          <label>Phone number (E.164)
+            <input name="phone_number" type="tel" maxlength="45" placeholder="+14155552671" />
+          </label>
+          <label>Slot number
+            <input name="slot_number" type="text" maxlength="45" />
+          </label>
+        </div>
+        <div class="form-row">
+          <label>Email address
+            <input name="email_address" type="email" maxlength="45" placeholder="name@example.com" />
+          </label>
+        </div>
+        <div class="form-row checks">
+          <label class="check"><input name="sms_alarm_enabled" type="checkbox" checked /> SMS alarm</label>
+          <label class="check"><input name="email_alarm_enabled" type="checkbox" /> Email alarm</label>
+        </div>
+        <div id="contact-form-err" class="form-err hidden"></div>
+        <div class="form-actions">
+          <button type="button" id="contact-cancel" class="btn btn-ghost">Cancel</button>
+          <button type="submit" id="contact-save" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Live event feed drawer -->
+  <aside id="feed-drawer" class="drawer hidden">
+    <div class="drawer-head">
+      <h3>📡 Live Events</h3>
+      <div class="drawer-actions">
+        <button id="feed-clear" class="btn btn-ghost">Clear</button>
+        <button id="feed-close" class="btn btn-ghost">✕</button>
+      </div>
+    </div>
+    <div id="feed-list" class="feed-list">
+      <div class="feed-empty muted">Waiting for webhooks…<br><span class="small">POST events to <code>/webhook</code></span></div>
+    </div>
+  </aside>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

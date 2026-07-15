@@ -1,104 +1,120 @@
-# lucas-test-webhook
+# CHeKT Monitoring Dashboard
 
-들어오는 webhook 요청을 캡처해서 데이터가 제대로 오는지 확인하는 Express 테스트 서비스.
-어떤 경로/메서드로 오는 요청이든 헤더·쿼리·바디를 전부 기록하고, 브라우저에서 확인할 수 있습니다.
+A monitoring dashboard demo built on the [CHeKT Public API](https://public-apidoc-chekt.web.app/).
+It lists sites, shows live arming state and camera status, browses activity logs and
+event video — and **applies incoming webhooks to the dashboard in real time**.
 
-## 기능
+- **Backend** — Express server. Holds the API key server-side and proxies the CHeKT API.
+  Also receives CHeKT webhooks and relays them to the browser over SSE.
+- **Frontend** — static HTML/CSS/JS (no build step). Subscribes to the SSE stream and
+  updates arming badges, camera status, and the activity feed without a page reload.
 
-- 아무 경로로나 요청을 보내면 캡처됨 (`POST /webhook`, `POST /hook/anything` 등)
-- JSON / form-urlencoded / text / XML / raw(binary) 바디 모두 파싱
-- 최근 요청을 **`data.json` 파일에 저장** → 재시작해도 유지 (기본 100개, `MAX_HISTORY`로 조정)
-- 브라우저 뷰어: `GET /_inspect` (2초마다 자동 새로고침)
-- JSON API: `GET /_inspect/data`, 초기화: `POST /_inspect/clear`
-- 헬스체크: `GET /_health`
+```
+demo/
+├─ server.js          Express: API proxy + webhook receiver + SSE + static hosting
+├─ lib/chekt.js       CHeKT API client (Bearer auth, per-resource helpers)
+├─ public/
+│  ├─ index.html      Dashboard markup
+│  ├─ styles.css      Styles (dark theme)
+│  └─ app.js          Dashboard logic + live webhook handling
+├─ .env               Config (API key, base URL, port) — git-ignored
+└─ .env.example       Template
+```
 
-> 예약 경로는 `/_inspect`, `/_health` 로 시작합니다. 실제 webhook은 그 외 아무 경로나 사용하세요.
-
-## 로컬 실행
+## Setup
 
 ```bash
 npm install
-npm start            # PORT=3000 기본
-PORT=8080 npm start  # 포트 변경
+cp .env.example .env      # then fill in CHEKT_API_KEY
+npm start                 # or: npm run dev  (auto-restart on change)
 ```
 
-확인:
+Open **http://localhost:3200**.
 
-```bash
-curl -X POST http://localhost:3000/webhook -H 'Content-Type: application/json' -d '{"hello":"world"}'
-# 브라우저에서 http://localhost:3000/_inspect
+### Configuration (`.env`)
+
+| Variable | Description |
+|---|---|
+| `CHEKT_API_KEY` | Dealer API key. Dealer portal → Settings → Developer Settings → API Keys. Required for live data. |
+| `CHEKT_API_BASE` | API base URL. `https://api.chekt.com` (prod) or `https://api.chektdev.com` (dev). |
+| `PORT` | HTTP port. Defaults to `3200`. |
+
+The API key is read only on the server and is **never** sent to the browser — the frontend
+talks exclusively to the local `/api/*` proxy.
+
+## Features
+
+- **Sites** — searchable list; partition / inactive tags; account numbers.
+- **Arming** — live status with Arm / Disarm. Partition-system sites get per-partition controls.
+- **Cameras** — online/offline status, zones, and an MJPEG thumbnail for online cameras.
+- **Activity Log** — category + time-range filtered, cursor pagination, per-event video links.
+- **Event Video** — fetches presigned mp4/snapshot URLs on demand.
+- **Live Events (webhooks)** — see below.
+
+## Live webhook updates
+
+Point your CHeKT dealer webhook subscription at:
+
+```
+POST http://<this-host>:3200/webhook
 ```
 
-## EC2 배포
+Every delivery is normalized and pushed to open dashboards over Server-Sent Events. The
+browser then **applies the change in place** (inspired by `lucas-test-webhook`, but instead
+of logging payloads to disk it mutates the live view):
 
-### 1. 서버 준비 (Amazon Linux 2023 기준)
+| Webhook `event_type` | What the dashboard does |
+|---|---|
+| `arming_status` | Update the arming badge for the matching site |
+| `partition_arming_status` | Refresh partition arming state |
+| `camera_network` (`is_online`) | Flip that camera online/offline + update KPIs |
+| `alarm_event`, `event_video` | Prepend a live row to the activity log |
+| *(any)* | Add to the **📡 Events** feed drawer + toast for notable events |
 
-```bash
-sudo dnf install -y nodejs git        # Ubuntu: sudo apt install -y nodejs npm git
-git clone <이-저장소-URL> lucas-test-webhook
-cd lucas-test-webhook
-npm install --omit=dev
-```
+Expected CHeKT wire format (see `@chekt/webhook`):
 
-### 2. 보안 그룹 (Security Group)
-
-- 인바운드 규칙에 사용할 포트(예: TCP 80 또는 3000)를 webhook 발신 측 IP에 열어줍니다.
-- 80/443 포트를 쓰려면 아래 systemd 방식에서 `PORT=80` 지정(권한 필요) 또는 Nginx 리버스 프록시 권장.
-
-### 3. systemd 로 상시 실행 (재부팅 후 자동 시작)
-
-`/etc/systemd/system/webhook.service`:
-
-```ini
-[Unit]
-Description=lucas-test-webhook
-After=network.target
-
-[Service]
-Type=simple
-User=ec2-user
-WorkingDirectory=/home/ec2-user/lucas-test-webhook
-Environment=PORT=3000
-ExecStart=/usr/bin/node server.js
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now webhook
-sudo systemctl status webhook      # 상태 확인
-journalctl -u webhook -f           # 실시간 로그 (캡처된 요청이 여기 찍힘)
-```
-
-### 4. (선택) Nginx 리버스 프록시로 80 포트 노출
-
-```nginx
-server {
-    listen 80;
-    server_name _;
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
+```json
+{
+  "event_id": 25,
+  "event_type": "arming_status",
+  "status": "armed",
+  "api_version": "v1",
+  "payload": {
+    "data": { "site_id": 1784, "site_name": "Trevor Office", "arming_status": "armed" },
+    "triggered_by": { "email": "user@example.com" }
+  }
 }
 ```
 
-## 환경 변수
+### Try it locally
 
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `PORT` | `3000` | 리슨 포트 |
-| `MAX_HISTORY` | `100` | 보관할 최근 요청 수 |
-| `DATA_FILE` | `data.json` | 캡처된 요청을 저장할 파일 경로 |
-| `CAPTURE_METHODS` | `POST` | 기록할 HTTP 메서드(쉼표 구분). 예: `POST,PUT`. 그 외 메서드(브라우저의 `GET /favicon.ico` 등)는 무시됨 |
+With the server running, open the dashboard, select the matching site, then send:
 
-## 데이터 저장 방식
+```bash
+curl -X POST http://localhost:3200/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"event_type":"arming_status","status":"armed","payload":{"data":{"site_id":1784,"site_name":"Trevor Office","arming_status":"armed"}}}'
+```
 
-- 요청이 들어올 때마다 `DATA_FILE`(기본 `data.json`)에 저장됩니다. 서버를 재시작하면 이 파일을 다시 읽어와 이전 요청이 유지됩니다.
-- 임시 파일에 쓴 뒤 `rename` 하는 방식이라 쓰기 도중 크래시가 나도 파일이 깨지지 않습니다.
-- `POST /_inspect/clear` 를 호출하면 메모리와 파일이 모두 비워집니다.
+The arming badge flips to **Armed**, a live row appears in the activity log, and the event
+shows in the 📡 Events drawer — no reload.
+
+> Receiving webhooks from CHeKT's servers requires a publicly reachable URL. For local
+> testing, expose the port with a tunnel (e.g. `ngrok http 3200`) and register that URL.
+
+## HTTP surface
+
+Frontend-facing routes (proxied to CHeKT unless noted):
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/config` | Server mode (configured? base URL) — *local* |
+| GET | `/api/sites` | List sites |
+| GET/POST | `/api/sites/:id/arming[/arm\|/disarm]` | Site arming |
+| GET/POST | `/api/sites/:id/partition-arming[/arm\|/disarm]` | Partition arming |
+| GET | `/api/sites/:id/cameras` · `/zones` · `/audio-devices` | Devices |
+| GET/POST | `/api/activity-logs/categories` · `/search` | Activity logs |
+| POST | `/api/events-video-urls` | Event video URLs |
+| GET | `/api/events/stream` | SSE stream of webhooks — *local* |
+| GET | `/api/events/recent` | Recent webhooks (hydration) — *local* |
+| POST | `/webhook` (+ `/webhook/*`) | Webhook receiver — *local* |
