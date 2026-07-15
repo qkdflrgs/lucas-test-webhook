@@ -36,7 +36,7 @@ app.use(express.json({ limit: '5mb', type: ['application/json', '+json'] }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use(express.text({ limit: '5mb', type: ['text/*', 'application/xml', '+xml'] }));
 
-const PORT = process.env.PORT || 3200;
+const PORT = process.env.PORT || 3000;
 
 // --- Config status ---
 app.get('/api/config', (req, res) => {

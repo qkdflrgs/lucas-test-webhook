@@ -29,7 +29,7 @@ cp .env.example .env      # then fill in CHEKT_API_KEY
 npm start                 # or: npm run dev  (auto-restart on change)
 ```
 
-Open **http://localhost:3200**.
+Open **http://localhost:3000**.
 
 ### Configuration (`.env`)
 
@@ -37,7 +37,7 @@ Open **http://localhost:3200**.
 |---|---|
 | `CHEKT_API_KEY` | Dealer API key. Dealer portal → Settings → Developer Settings → API Keys. Required for live data. |
 | `CHEKT_API_BASE` | API base URL. `https://api.chekt.com` (prod) or `https://api.chektdev.com` (dev). |
-| `PORT` | HTTP port. Defaults to `3200`. |
+| `PORT` | HTTP port. Defaults to `3000`. |
 
 The API key is read only on the server and is **never** sent to the browser — the frontend
 talks exclusively to the local `/api/*` proxy.
@@ -56,7 +56,7 @@ talks exclusively to the local `/api/*` proxy.
 Point your CHeKT dealer webhook subscription at:
 
 ```
-POST http://<this-host>:3200/webhook
+POST http://<this-host>:3000/webhook
 ```
 
 Every delivery is normalized and pushed to open dashboards over Server-Sent Events. The
@@ -91,7 +91,7 @@ Expected CHeKT wire format (see `@chekt/webhook`):
 With the server running, open the dashboard, select the matching site, then send:
 
 ```bash
-curl -X POST http://localhost:3200/webhook \
+curl -X POST http://localhost:3000/webhook \
   -H "Content-Type: application/json" \
   -d '{"event_type":"arming_status","status":"armed","payload":{"data":{"site_id":1784,"site_name":"Trevor Office","arming_status":"armed"}}}'
 ```
@@ -100,7 +100,7 @@ The arming badge flips to **Armed**, a live row appears in the activity log, and
 shows in the 📡 Events drawer — no reload.
 
 > Receiving webhooks from CHeKT's servers requires a publicly reachable URL. For local
-> testing, expose the port with a tunnel (e.g. `ngrok http 3200`) and register that URL.
+> testing, expose the port with a tunnel (e.g. `ngrok http 3000`) and register that URL.
 
 ## HTTP surface
 
